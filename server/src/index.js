@@ -47,13 +47,17 @@ app.use(morgan("dev"));
 app.use(helmet());
 app.use(cors({
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
-    // Dynamic check for localhost
-    if (/^http:\/\/localhost:\d+$/.test(origin)) {
+
+    const allowedOrigins = [
+      "http://localhost:3000",
+      process.env.CLIENT_URL
+    ];
+
+    if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS'));
+      callback(new Error("Not allowed by CORS"));
     }
   },
   credentials: true

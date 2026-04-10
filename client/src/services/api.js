@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const api = axios.create({
-    baseURL: 'https://finwiz-chi.vercel.app', // Adjust if backend port differs
+    baseURL: 'https://finwiz-z627.onrender.com', // Adjust if backend port differs
     headers: {
         'Content-Type': 'application/json',
     },

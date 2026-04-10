@@ -1,20 +1,19 @@
-// src/services/mfService.js
 import axios from "axios";
 
 const MFAPI_BASE = "https://api.mfapi.in/mf";
 
 /**
- * Fetch full MF list (contains name + schemeCode)
+ * Fetch all mutual funds
  */
 export async function fetchFundList() {
   const res = await axios.get(MFAPI_BASE);
-  return res.data; // array of { schemeCode, schemeName }
+  return res.data;
 }
 
 /**
- * Fetch NAV history of a fund using schemeCode
+ * Fetch NAV history for a specific scheme
  */
 export async function fetchFundHistory(schemeCode) {
   const res = await axios.get(`${MFAPI_BASE}/${schemeCode}`);
-  return res.data; // includes: data: [ { date, nav }, ... ]
+  return res.data;
 }

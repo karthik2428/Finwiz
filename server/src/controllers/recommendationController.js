@@ -1,183 +1,132 @@
 import asyncHandler from "../middlewares/asyncHandler.js";
-import { fetchFundList, fetchFundHistory } from "../services/mfService.js";
-import { computeCAGR, estimateSIP } from "../utils/mfMath.js";
+import { estimateSIP } from "../utils/mfMath.js";
 import Goal from "../models/Goal.js";
+import FundMetadata from "../models/FundMetadata.js";
 
-/* -------------------------------------------------- */
-/* FUND CLASSIFICATION (RELAXED & REALISTIC)          */
-/* -------------------------------------------------- */
-function classifyFund(name) {
-  const n = name.toLowerCase();
+/* ===================================================== */
+/* DURATION-BASED PORTFOLIO STRUCTURES                   */
+/* ===================================================== */
 
-  if (n.includes("liquid")) return "liquid";
-  if (n.includes("ultra short")) return "ultra_short";
-  if (n.includes("short term")) return "short_term";
-  if (n.includes("corporate")) return "corporate_bond";
+function buildPortfolioTemplate(durationMonths) {
 
-  if (n.includes("index") || n.includes("nifty") || n.includes("sensex"))
-    return "index";
+  if (durationMonths <= 24) {
+    return {
+      name: "Capital Protection Portfolio",
+      expectedReturn: 7,
+      buckets: [
+        { types: ["liquid"], weight: 40 },
+        { types: ["corporate_bond"], weight: 40 },
+        { types: ["short_term"], weight: 20 }
+      ]
+    };
+  }
 
-  if (n.includes("bluechip")) return "bluechip";
+  if (durationMonths <= 60) {
+    return {
+      name: "Balanced Growth Portfolio",
+      expectedReturn: 12,
+      buckets: [
+        { types: ["large_cap", "bluechip"], weight: 35 },
+        { types: ["hybrid"], weight: 25 },
+        { types: ["mid_cap"], weight: 25 },
+        { types: ["index"], weight: 15 }
+      ]
+    };
+  }
 
-  if (n.includes("large") && n.includes("mid")) return "mid_cap";
-  if (n.includes("large")) return "large_cap";
-
-  if (n.includes("flexi")) return "flexi_cap";
-  if (n.includes("multi")) return "multi_cap";
-
-  if (n.includes("mid")) return "mid_cap";
-  if (n.includes("small")) return "small_cap";
-
-  if (n.includes("balanced") || n.includes("hybrid")) return "hybrid";
-
-  return "other";
-}
-
-/* -------------------------------------------------- */
-/* PORTFOLIO TEMPLATES                                */
-/* -------------------------------------------------- */
-const PORTFOLIO_TEMPLATES = {
-  CONSERVATIVE_SHORT: {
-    name: "Capital Protection Portfolio",
-    expectedReturn: 7,
-    buckets: [
-      { type: "liquid", weight: 40 },
-      { type: "corporate_bond", weight: 40 },
-      { type: "short_term", weight: 20 }
-    ]
-  },
-
-  MODERATE_MEDIUM: {
-    name: "Balanced Growth Portfolio",
-    expectedReturn: 12,
-    buckets: [
-      { type: "large_cap", weight: 35 },
-      { type: "hybrid", weight: 25 },
-      { type: "mid_cap", weight: 25 },
-      { type: "index", weight: 15 }
-    ]
-  },
-
-  AGGRESSIVE_LONG: {
+  return {
     name: "Growth Accelerator Portfolio",
     expectedReturn: 15,
     buckets: [
-      { type: "large_cap", weight: 30 },
-      { type: "flexi_cap", weight: 30 },
-      { type: "mid_cap", weight: 25 },
-      { type: "small_cap", weight: 15 }
+      { types: ["flexi_cap", "multi_cap"], weight: 30 },
+      { types: ["mid_cap"], weight: 30 },
+      { types: ["small_cap"], weight: 25 },
+      { types: ["large_cap"], weight: 15 }
     ]
-  }
-};
-
-/* -------------------------------------------------- */
-/* PORTFOLIO SELECTION                                */
-/* -------------------------------------------------- */
-function selectPortfolio(risk, months) {
-  if (months <= 24) return PORTFOLIO_TEMPLATES.CONSERVATIVE_SHORT;
-  if (risk === "low") return PORTFOLIO_TEMPLATES.CONSERVATIVE_SHORT;
-  if (risk === "medium") return PORTFOLIO_TEMPLATES.MODERATE_MEDIUM;
-  return PORTFOLIO_TEMPLATES.AGGRESSIVE_LONG;
+  };
 }
 
-/* -------------------------------------------------- */
-/* CONTROLLER                                        */
-/* -------------------------------------------------- */
+/* ===================================================== */
+/* CONTROLLER                                             */
+/* ===================================================== */
+
 export const recommendFunds = asyncHandler(async (req, res) => {
+
   const { goalId } = req.query;
-  if (!goalId) return res.status(400).json({ message: "goalId required" });
 
-  const goal = await Goal.findOne({ _id: goalId, createdBy: req.user._id });
-  if (!goal) return res.status(404).json({ message: "Goal not found" });
+  if (!goalId)
+    return res.status(400).json({ message: "goalId required" });
 
-  /* ✅ Normalize risk */
-  const riskMap = {
-    conservative: "low",
-    moderate: "medium",
-    aggressive: "high"
-  };
-  const userRisk = riskMap[goal.riskCategory] || "medium";
+  const goal = await Goal.findOne({
+    _id: goalId,
+    createdBy: req.user._id
+  });
 
-  /* ✅ Derive duration */
+  if (!goal)
+    return res.status(404).json({ message: "Goal not found" });
+
   const durationMonths = Math.max(
     1,
-    Math.ceil((new Date(goal.targetDate) - new Date()) / (30 * 24 * 60 * 60 * 1000))
+    Math.ceil(
+      (new Date(goal.targetDate) - new Date()) /
+      (30 * 24 * 60 * 60 * 1000)
+    )
   );
 
-  /* -------------------------------------------------- */
-  /* FETCH & SCORE FUNDS                                */
-  /* -------------------------------------------------- */
-  const funds = await fetchFundList();
-  const scored = [];
+  const template = buildPortfolioTemplate(durationMonths);
 
-  for (const fund of funds.slice(0, 80)) { // ✅ scan more funds
-    try {
-      const history = await fetchFundHistory(fund.schemeCode);
-      const navs = history.data;
+  /* ---------------- Fetch All Approved Funds ---------------- */
 
-      if (!navs || navs.length < 360) continue;
+  const funds = await FundMetadata.find({ approved: true })
+    .select(
+      "schemeName schemeCode categoryOverride cagr1y cagr3y cagr5y volatility1y"
+    )
+    .limit(500);
 
-      const newest = Number(navs[0].nav);
-      const oldest = Number(navs[navs.length - 360].nav);
-      if (!oldest || !newest || oldest <= 0) continue;
+  if (!funds.length)
+    return res.json({ message: "No funds available" });
 
-      let cagr = computeCAGR(oldest, newest, 1) * 100;
-      cagr = Math.min(Math.max(cagr, 4), 18);
+  /* ---------------- Sort Funds By Long-Term Strength ---------------- */
 
-      const last90 = navs.slice(0, 90).map(n => Number(n.nav));
-      const avg = last90.reduce((a, b) => a + b, 0) / last90.length;
-      const volatility = Math.sqrt(
-        last90.reduce((s, n) => s + Math.pow(n - avg, 2), 0) / last90.length
-      );
+  const sortedFunds = funds.sort((a, b) => {
+    return (b.cagr5y || 0) - (a.cagr5y || 0);
+  });
 
-      scored.push({
-        fundName: fund.schemeName,
-        schemeCode: fund.schemeCode,
-        type: classifyFund(fund.schemeName),
-        cagr: Number(cagr.toFixed(2)),
-        volatility: Number(volatility.toFixed(2))
-      });
-    } catch {}
-  }
+  /* ---------------- Build Portfolio ---------------- */
 
-  if (!scored.length) {
-    return res.json({ message: "Unable to score funds at this time" });
-  }
-
-  /* -------------------------------------------------- */
-  /* BUILD PORTFOLIO (✅ FIXED)                          */
-  /* -------------------------------------------------- */
-  const template = selectPortfolio(userRisk, durationMonths);
   const portfolioFunds = [];
+  const used = new Set();
 
   for (const bucket of template.buckets) {
-    let candidates = scored.filter(f => f.type === bucket.type);
 
-    // ✅ relaxed matching
-    if (bucket.type === "large_cap") {
-      candidates = candidates.concat(scored.filter(f => f.type === "bluechip"));
-    }
+    const candidates = sortedFunds.filter(
+      f =>
+        bucket.types.includes(f.categoryOverride) &&
+        !used.has(f.schemeCode)
+    );
 
-    if (bucket.type === "flexi_cap") {
-      candidates = candidates.concat(scored.filter(f => f.type === "multi_cap"));
-    }
+    if (!candidates.length) continue;
 
-    // ✅ fallback: best overall fund
-    const best =
-      candidates.sort((a, b) => b.cagr - a.cagr || a.volatility - b.volatility)[0]
-      || scored.sort((a, b) => b.cagr - a.cagr)[0];
+    const best = candidates[0];
+    used.add(best.schemeCode);
 
-    if (!best) continue;
+    const selectedCagr =
+      durationMonths <= 24
+        ? best.cagr1y
+        : durationMonths <= 60
+        ? best.cagr3y
+        : best.cagr5y;
 
     portfolioFunds.push({
-      ...best,
+      fundName: best.schemeName,
+      schemeCode: best.schemeCode,
+      cagr: Number(selectedCagr?.toFixed(2)),
       allocationPercent: bucket.weight
     });
   }
 
-  /* -------------------------------------------------- */
-  /* SIP CALCULATION                                    */
-  /* -------------------------------------------------- */
+  /* ---------------- SIP Calculation ---------------- */
+
   const totalSip = estimateSIP(
     goal.targetAmount,
     template.expectedReturn,
@@ -186,12 +135,11 @@ export const recommendFunds = asyncHandler(async (req, res) => {
 
   const fundsWithSip = portfolioFunds.map(f => ({
     ...f,
-    monthlySip: Math.round(totalSip * f.allocationPercent / 100)
+    monthlySip: Math.round(
+      (totalSip * f.allocationPercent) / 100
+    )
   }));
 
-  /* -------------------------------------------------- */
-  /* RESPONSE                                           */
-  /* -------------------------------------------------- */
   res.json({
     goal: {
       title: goal.title,

@@ -1,10 +1,19 @@
-import { Navigate, Outlet } from 'react-router-dom';
-import { useAuth } from '../../context/AuthContext';
+import { Navigate, Outlet } from "react-router-dom";
+import { useAuth } from "../../context/AuthContext";
 
-export default function PrivateRoute() {
-    const { user, loading } = useAuth();
+export default function PrivateRoute({ role }) {
+  const { user } = useAuth();
 
-    if (loading) return <div className="flex items-center justify-center min-h-screen">Loading...</div>;
+  // ⛔ Not logged in
+  if (!user) {
+    return <Navigate to="/login" replace />;
+  }
 
-    return user ? <Outlet /> : <Navigate to="/login" replace />;
+  // 🔐 Role-based protection (only if role prop is provided)
+  if (role && user.role !== role) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  // ✅ Access granted
+  return <Outlet />;
 }

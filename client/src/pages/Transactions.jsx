@@ -8,6 +8,7 @@ import Modal from '../components/common/Modal';
 import TransactionForm from '../components/dashboard/TransactionForm';
 import api from '../services/api';
 import Card from '../components/common/Card';
+import { toast } from 'react-hot-toast';
 
 export default function Transactions() {
   const location = useLocation();
@@ -184,21 +185,46 @@ export default function Transactions() {
 
           <div className="flex gap-2">
             <input
-              type="file"
-              accept=".csv"
-              id="csv-upload"
-              hidden
-              onChange={async e => {
-                const file = e.target.files[0];
-                if (!file) return;
+  type="file"
+  accept=".csv"
+  id="csv-upload"
+  hidden
+  onChange={async e => {
+    const file = e.target.files[0];
+    if (!file) return;
 
-                const fd = new FormData();
-                fd.append('file', file);
-                await api.post('/transactions/upload-csv', fd);
-                fetchTransactions(1);
-                e.target.value = null;
-              }}
-            />
+    if (!file.name.endsWith('.csv')) {
+      toast.error('Please upload a CSV file');
+      e.target.value = null;
+      return;
+    }
+
+    const fd = new FormData();
+    fd.append('file', file);
+
+    const toastId = toast.loading('Uploading CSV...');
+
+    try {
+      const res = await api.post('/transactions/upload-csv', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+
+      toast.success(
+        res.data?.message || 'CSV uploaded successfully',
+        { id: toastId }
+      );
+
+      fetchTransactions(1);
+    } catch (err) {
+      toast.error(
+        err.response?.data?.message || 'CSV upload failed',
+        { id: toastId }
+      );
+    } finally {
+      e.target.value = null;
+    }
+  }}
+/>
 
             <Button
               variant="outline"

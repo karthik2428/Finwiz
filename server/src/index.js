@@ -1,6 +1,7 @@
 // src/index.js
 import express from "express";
 import dotenv from "dotenv";
+dotenv.config();
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import morgan from "morgan";
@@ -35,7 +36,7 @@ import adminLogRoutes from "./routes/adminLogRoutes.js";
 import { requestLogger } from "./middlewares/requestLogger.js";
 import { errorLogger } from "./middlewares/errorLogger.js";
 import { startLogCron } from "./services/logCron.js";
-dotenv.config();
+
 const app = express();
 
 connectDB();

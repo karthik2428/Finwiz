@@ -14,23 +14,19 @@ export const razorpayWebhook = async (req, res) => {
       return res.status(400).json({ message: "Missing signature header" });
     }
 
-    const rawBody = req.rawBody; // Buffer
-    console.log("RAW BODY RECEIVED:", rawBody.toString());
+    const rawBody = req.rawBody;
 
-    const crypto = await import("crypto");
-    const expected = crypto.createHmac("sha256", secret)
+    const expected = crypto
+      .createHmac("sha256", secret)
       .update(rawBody)
       .digest("hex");
-
-    console.log("EXPECTED:", expected);
-    console.log("RECEIVED:", signature);
 
     if (expected !== signature) {
       return res.status(400).json({ message: "Invalid webhook signature" });
     }
 
     const json = JSON.parse(rawBody.toString());
-    console.log("WEBHOOK JSON:", json);
+    console.log("WEBHOOK EVENT:", json.event);
 
     return res.json({ status: "ok" });
 
@@ -39,6 +35,7 @@ export const razorpayWebhook = async (req, res) => {
     return res.status(400).json({ message: "Invalid webhook body" });
   }
 };
+
 
 
 

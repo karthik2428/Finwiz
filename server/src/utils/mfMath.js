@@ -1,14 +1,98 @@
 /**
- * CAGR Formula:
+ * ================================
+ * CAGR Formula
  * CAGR = (Ending / Beginning)^(1/years) - 1
+ * ================================
  */
 export function computeCAGR(oldNav, newNav, years) {
-  if (oldNav <= 0 || newNav <= 0 || years <= 0) return 0;
+  if (!oldNav || !newNav || oldNav <= 0 || newNav <= 0 || years <= 0) {
+    return 0;
+  }
+
   return Math.pow(newNav / oldNav, 1 / years) - 1;
 }
 
 /**
- * ✅ PRODUCTION-SAFE SIP CALCULATION
+ * ================================
+ * Annualized Volatility
+ * Based on daily returns
+ * ================================
+ */
+export function calculateVolatility(navData) {
+  if (!navData || navData.length < 2) return 0;
+
+  const returns = [];
+
+  for (let i = 1; i < navData.length; i++) {
+    const today = Number(navData[i - 1].nav);
+    const yesterday = Number(navData[i].nav);
+
+    if (today > 0 && yesterday > 0) {
+      returns.push((today - yesterday) / yesterday);
+    }
+  }
+
+  if (!returns.length) return 0;
+
+  const mean =
+    returns.reduce((sum, r) => sum + r, 0) / returns.length;
+
+  const variance =
+    returns.reduce((sum, r) => sum + Math.pow(r - mean, 2), 0) /
+    returns.length;
+
+  // Annualized volatility (assuming 252 trading days)
+  return Math.sqrt(variance) * Math.sqrt(252) * 100;
+}
+
+/**
+ * ================================
+ * Sharpe Ratio
+ * (Return - RiskFreeRate) / Volatility
+ * ================================
+ */
+export function calculateSharpeRatio(cagrPct, volatilityPct, riskFreeRate = 6) {
+  if (!volatilityPct || volatilityPct <= 0) return 0;
+
+  const excessReturn = cagrPct - riskFreeRate;
+  return excessReturn / volatilityPct;
+}
+
+/**
+ * ================================
+ * Smart Scoring Engine
+ * Duration + Risk Aware
+ * ================================
+ */
+export function computeSmartScore(fund, durationMonths, userRisk) {
+  let baseReturn = 0;
+
+  // Duration-based return selection
+  if (durationMonths <= 24) {
+    baseReturn = fund.cagr1y;
+  } else if (durationMonths <= 60) {
+    baseReturn = fund.cagr3y;
+  } else {
+    baseReturn = fund.cagr5y;
+  }
+
+  let volatilityPenalty = 0;
+
+  if (userRisk === "low") {
+    volatilityPenalty = fund.volatility1y * 1.5;
+  } else if (userRisk === "medium") {
+    volatilityPenalty = fund.volatility1y;
+  } else {
+    volatilityPenalty = fund.volatility1y * 0.5;
+  }
+
+  return baseReturn - volatilityPenalty;
+}
+
+/**
+ * ================================
+ * Production-Safe SIP Calculation
+ * ================================
  */
 export function estimateSIP(target, annualReturnPct, months) {
   if (!months || months <= 0 || target <= 0) return 0;
@@ -26,27 +110,4 @@ export function estimateSIP(target, annualReturnPct, months) {
   if (!isFinite(factor) || factor <= 0) return 0;
 
   return Number((target / factor).toFixed(2));
-}
-
-/**
- * Fund suitability logic
- */
-export function getSuitableFundTypes(userRisk, goalMonths) {
-  if (goalMonths <= 12) return ["liquid", "ultra_short"];
-
-  if (goalMonths <= 36) {
-    if (userRisk === "low") return ["short_term", "corporate_bond"];
-    if (userRisk === "medium") return ["hybrid", "balanced"];
-    return ["aggressive_hybrid"];
-  }
-
-  if (goalMonths <= 60) {
-    if (userRisk === "low") return ["large_cap", "index"];
-    if (userRisk === "medium") return ["multi_cap", "flexi_cap"];
-    return ["mid_cap"];
-  }
-
-  if (userRisk === "low") return ["index", "bluechip"];
-  if (userRisk === "medium") return ["flexi_cap", "multi_cap"];
-  return ["mid_cap", "small_cap"];
 }

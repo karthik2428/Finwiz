@@ -1,47 +1,75 @@
 // src/services/cronService.js
-/**
- * cronService.js
- * Provides a simple cron manager to schedule daily subscription scans per user.
- * For demo/POC, we run a single global job that iterates active users and triggers detection.
- *
- * In production, prefer a queue system (Bull/Redis) and process per-user tasks to avoid timeouts.
- */
 
 import cron from "node-cron";
 import User from "../models/User.js";
 import Transaction from "../models/Transaction.js";
 import Subscription from "../models/Subscription.js";
+import FundMetadata from "../models/FundMetadata.js";
 import { detectSubscriptionsFromTransactions } from "../utils/subscriptionDetector.js";
+import { fetchFundHistory } from "./mfService.js";
+import {
+  computeCAGR,
+  calculateVolatility,
+  calculateSharpeRatio
+} from "../utils/mfMath.js";
 
-/* Global job handle */
+/* ================= JOB HANDLES ================= */
+
 let subscriptionScanJob = null;
+let fundScoreJob = null;
 
-/* function to run a single user's scan (similar to controller but internal) */
+/* ========================================================= */
+/* ================= SUBSCRIPTION CRON ===================== */
+/* ========================================================= */
+
 async function runScanForUser(userId, lookbackMonths = 12) {
   const since = new Date();
   since.setMonth(since.getMonth() - lookbackMonths);
-  const txs = await Transaction.find({ createdBy: userId, kind: "expense", date: { $gte: since }}).sort({ date: 1 });
+
+  const txs = await Transaction.find({
+    createdBy: userId,
+    kind: "expense",
+    date: { $gte: since }
+  }).sort({ date: 1 });
+
   const detected = detectSubscriptionsFromTransactions(txs, {
-    nameSimilarityThreshold: 0.8, minPayments: 3, recurrenceToleranceDays: 5, amountVariationPct: 0.25, priceCreepWindow: 4, priceCreepPct: 0.08
+    nameSimilarityThreshold: 0.8,
+    minPayments: 3,
+    recurrenceToleranceDays: 5,
+    amountVariationPct: 0.25,
+    priceCreepWindow: 4,
+    priceCreepPct: 0.08
   });
 
   for (const d of detected) {
-    const existing = await Subscription.findOne({ user: userId, merchantSignature: d.merchantSignature });
-    const paymentRecords = d.payments.map(p => ({ date: p.date, amount: p.amount, txId: p.txId }));
+    const existing = await Subscription.findOne({
+      user: userId,
+      merchantSignature: d.merchantSignature
+    });
+
+    const paymentRecords = d.payments.map(p => ({
+      date: p.date,
+      amount: p.amount,
+      txId: p.txId
+    }));
+
     if (existing) {
-      existing.title = d.title;
-      existing.avgAmount = d.avgAmount;
-      existing.amountStdDev = d.amountStdDev;
-      existing.recurrenceDays = d.recurrenceDays;
-      existing.recurrenceStdDev = d.recurrenceStdDev;
-      existing.lastPayments = paymentRecords;
-      existing.estimatedNextDate = d.estimatedNextDate;
-      existing.monthlyCost = d.monthlyCost;
-      existing.priceCreep = d.priceCreep;
-      existing.detectedAt = new Date();
+      Object.assign(existing, {
+        title: d.title,
+        avgAmount: d.avgAmount,
+        amountStdDev: d.amountStdDev,
+        recurrenceDays: d.recurrenceDays,
+        recurrenceStdDev: d.recurrenceStdDev,
+        lastPayments: paymentRecords,
+        estimatedNextDate: d.estimatedNextDate,
+        monthlyCost: d.monthlyCost,
+        priceCreep: d.priceCreep,
+        detectedAt: new Date()
+      });
+
       await existing.save();
     } else {
-      const s = new Subscription({
+      await Subscription.create({
         title: d.title,
         merchantSignature: d.merchantSignature,
         category: "Subscription",
@@ -55,57 +83,134 @@ async function runScanForUser(userId, lookbackMonths = 12) {
         priceCreep: d.priceCreep,
         user: userId,
         isConfirmed: false,
-        active: true,
+        active: true
       });
-      await s.save();
     }
   }
 }
 
-/* Start scheduled job: runs daily at 02:00 server time */
 export function startSubscriptionScanner(cronSpec = "0 2 * * *") {
-  if (subscriptionScanJob) return; // already started
-  // cronSpec default "0 2 * * *" -> 02:00 daily
+  if (subscriptionScanJob) return;
+
   subscriptionScanJob = cron.schedule(cronSpec, async () => {
     console.log("[cron] subscription scan started");
+
     try {
-      // iterate users in batches to avoid memory bloat; simple example processes all users
       const cursor = User.find({}).cursor();
-      for (let user = await cursor.next(); user != null; user = await cursor.next()) {
+
+      for (
+        let user = await cursor.next();
+        user != null;
+        user = await cursor.next()
+      ) {
         try {
           await runScanForUser(user._id, 12);
         } catch (err) {
-          console.error("Error scanning user", user._id, err);
+          console.error("User scan error:", err.message);
         }
       }
+
     } catch (err) {
-      console.error("[cron] subscription scan failed", err);
-    } finally {
-      console.log("[cron] subscription scan finished");
+      console.error("Subscription cron failed:", err.message);
     }
-  }, { scheduled: true });
+
+    console.log("[cron] subscription scan finished");
+  });
 
   subscriptionScanJob.start();
-  console.log("Subscription scanner scheduled:", cronSpec);
 }
 
-/* Stop job */
-export function stopSubscriptionScanner() {
-  if (!subscriptionScanJob) return;
-  subscriptionScanJob.stop();
-  subscriptionScanJob.destroy();
-  subscriptionScanJob = null;
-  console.log("Subscription scanner stopped");
-}
+/* ========================================================= */
+/* ================= FUND SCORING CRON ===================== */
+/* ========================================================= */
 
-/* Manual trigger for all users (careful in prod) */
-export async function triggerSubscriptionScanNow() {
-  const users = await User.find({});
-  for (const u of users) {
+export function startFundScoringCron(cronSpec = "* * * * *") {
+  if (fundScoreJob) return;
+
+  fundScoreJob = cron.schedule(cronSpec, async () => {
+    console.log("[cron] fund scoring started");
+
     try {
-      await runScanForUser(u._id, 12);
+      const funds = await FundMetadata.find({ approved: true });
+
+      for (const fund of funds) {
+        try {
+          const history = await fetchFundHistory(fund.schemeCode);
+
+          if (!history || !history.data || !Array.isArray(history.data)) {
+            console.log("Invalid NAV response:", fund.schemeCode);
+            continue;
+          }
+
+          const navs = history.data;
+
+          if (navs.length < 365) {
+            console.log("Not enough NAV data:", fund.schemeCode);
+            continue;
+          }
+
+          // MFAPI returns latest first
+          const newest = Number(navs[0].nav);
+
+          const getNav = (daysAgo) => {
+            if (navs.length > daysAgo) {
+              const value = Number(navs[daysAgo].nav);
+              return isNaN(value) ? null : value;
+            }
+            return null;
+          };
+
+          const old1y = getNav(365);
+          const old3y = getNav(365 * 3);
+          const old5y = getNav(365 * 5);
+
+          fund.cagr1y = old1y
+            ? computeCAGR(old1y, newest, 1) * 100
+            : 0;
+
+          fund.cagr3y = old3y
+            ? computeCAGR(old3y, newest, 3) * 100
+            : fund.cagr1y;
+
+          fund.cagr5y = old5y
+            ? computeCAGR(old5y, newest, 5) * 100
+            : fund.cagr3y;
+
+          fund.volatility1y = calculateVolatility(
+            navs.slice(0, 365)
+          );
+
+          fund.sharpeRatio = calculateSharpeRatio(
+            fund.cagr3y,
+            fund.volatility1y
+          );
+
+          fund.smartScore = fund.sharpeRatio;
+
+          fund.lastNavComputed = new Date();
+
+          await fund.save();
+
+          console.log(
+            `Updated ${fund.schemeName} → 1Y CAGR: ${fund.cagr1y.toFixed(2)}%`
+          );
+
+        } catch (err) {
+          console.error(
+            "Fund scoring error:",
+            fund.schemeCode,
+            err.message
+          );
+        }
+      }
+
+      console.log("[cron] fund scoring completed");
+
     } catch (err) {
-      console.error("Manual scan error for user", u._id, err);
+      console.error("Fund scoring cron failed:", err.message);
     }
-  }
+
+  });
+
+  fundScoreJob.start();
 }

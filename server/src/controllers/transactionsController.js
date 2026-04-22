@@ -40,9 +40,10 @@ export const createTransaction = asyncHandler(async (req, res) => {
 
   if (!category || category === "Uncategorized") {
     const catRes = categorizeTransaction({
-      merchant: value.merchant,
-      note: value.note
-    });
+  merchant: value.merchant,
+  note: value.note,
+  kind: value.kind // ✅ ADD THIS
+});
     category = catRes.category;
     confidence = catRes.confidence;
   }
@@ -115,10 +116,11 @@ export const updateTransaction = asyncHandler(async (req, res) => {
   Object.assign(tx, value);
 
   if ((value.merchant || value.note) && !value.category) {
-    const catRes = categorizeTransaction({
-      merchant: tx.merchant,
-      note: tx.note
-    });
+   const catRes = categorizeTransaction({
+  merchant: tx.merchant,
+  note: tx.note,
+  kind: tx.kind // ✅ ADD THIS
+});
     tx.category = catRes.category;
     tx.metadata = {
       ...tx.metadata,
@@ -235,7 +237,11 @@ export const uploadCsv = asyncHandler(async (req, res) => {
 
       const note = row.note || row.Note || "";
 
-      const catRes = categorizeTransaction({ merchant, note });
+     const catRes = categorizeTransaction({
+  merchant,
+  note,
+  kind // ✅ ADD THIS (you already computed it above)
+});
 
       const tx = new Transaction({
         kind,

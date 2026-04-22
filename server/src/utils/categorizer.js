@@ -2,56 +2,212 @@
 import stringSimilarity from "string-similarity";
 
 /**
- * Simple keyword-based auto-categorizer.
- * - Has a curated map of category => keywords.
- * - For a merchant/name + note, compute best matching category.
- * - Returns category string and confidence (0-1).
- *
- * This is intentionally simple and editable — extend keywords as needed.
+ * Improved auto-categorizer
+ * - Adds strong rules for income vs expense
+ * - Keeps similarity-based fallback
+ * - Prevents invalid category assignments
  */
 
 const CATEGORY_KEYWORDS = {
-  "Groceries": ["grocery","supermarket","walmart","grocery store","big basket","dmart","almagro"],
-  "Dining": ["restaurant","cafe","starbucks","dominos","pizza","zomato","swiggy","mcdonald"],
-  "Transport": ["uber","ola","taxi","metro","bus","fuel","petrol","diesel","parking"],
-  "Bills": ["electricity","water bill","gas bill","utility","internet","broadband","phone bill"],
-  "Subscription": ["netflix","spotify","hulu","prime","amazon prime","membership","subscription","spotify"],
-  "Shopping": ["flipkart","amazon","mall","shopping","clothes","zara","h&m","ajio"],
-  "Healthcare": ["hospital","clinic","pharmacy","doctor","medicines","apollo","clinic"],
-  "Salary": ["salary","payroll","ctc","salary credit","employer"],
-  "Investment": ["mutual fund","sip","brokerage","investment","mf"],
-  "Entertainment": ["movie","concert","theatre","show","event"],
-  "Education": ["college","school","tuition","course","udemy","coursera","education"],
-  "Rent": ["rent","landlord","apartment rent","house rent"]
+  Groceries: [
+    "grocery",
+    "supermarket",
+    "walmart",
+    "grocery store",
+    "big basket",
+    "dmart",
+    "almagro"
+  ],
+  Dining: [
+    "restaurant",
+    "cafe",
+    "starbucks",
+    "dominos",
+    "pizza",
+    "zomato",
+    "swiggy",
+    "mcdonald"
+  ],
+  Transport: [
+    "uber",
+    "ola",
+    "taxi",
+    "metro",
+    "bus",
+    "fuel",
+    "petrol",
+    "diesel",
+    "parking"
+  ],
+  Bills: [
+    "electricity",
+    "water bill",
+    "gas bill",
+    "utility",
+    "internet",
+    "broadband",
+    "phone bill"
+  ],
+  Subscription: [
+    "netflix",
+    "spotify",
+    "hulu",
+    "prime",
+    "amazon prime",
+    "membership",
+    "subscription"
+  ],
+  Shopping: [
+    "flipkart",
+    "amazon",
+    "mall",
+    "shopping",
+    "clothes",
+    "zara",
+    "h&m",
+    "ajio"
+  ],
+  Healthcare: [
+    "hospital",
+    "clinic",
+    "pharmacy",
+    "doctor",
+    "medicines",
+    "apollo"
+  ],
+  Salary: ["salary", "payroll", "ctc", "salary credit", "employer"],
+  Investment: [
+    "mutual fund",
+    "sip",
+    "brokerage",
+    "investment",
+    "mf",
+    "interest",
+    "dividend"
+  ],
+  Entertainment: [
+    "movie",
+    "concert",
+    "theatre",
+    "show",
+    "event",
+    "cinema"
+  ],
+  Education: [
+    "college",
+    "school",
+    "tuition",
+    "course",
+    "udemy",
+    "coursera"
+  ],
+  Rent: ["rent", "landlord", "apartment rent", "house rent"],
+  Freelance: [
+    "freelance",
+    "client",
+    "project",
+    "gig",
+    "payment received"
+  ],
+  Income: ["income", "credit", "received"]
 };
 
 /**
- * Flatten each category to a long string for similarity checks
+ * Flatten corpus
  */
-const categoryCorpus = Object.entries(CATEGORY_KEYWORDS).map(([cat, keys]) => ({
-  category: cat,
-  text: keys.join(" ")
-}));
+const categoryCorpus = Object.entries(CATEGORY_KEYWORDS).map(
+  ([cat, keys]) => ({
+    category: cat,
+    text: keys.join(" ")
+  })
+);
 
 /**
- * Attempts to categorize a transaction using merchant + note.
- * Returns: { category, confidence } where confidence 0..1.
+ * Main categorizer
  */
-export function categorizeTransaction({ merchant = "", note = "" }) {
+export function categorizeTransaction({
+  merchant = "",
+  note = "",
+  kind = ""
+}) {
   const source = `${merchant} ${note}`.toLowerCase().trim();
-  if (!source) return { category: "Uncategorized", confidence: 0 };
 
-  // Compare source against category corpora using string-similarity
+  if (!source) {
+    return { category: "Uncategorized", confidence: 0 };
+  }
+
+  /**
+   * ===============================
+   * 🔥 STEP 1: STRONG RULES (OVERRIDE)
+   * ===============================
+   */
+
+  // ✅ INCOME RULES (CRITICAL FIX)
+  if (kind === "income") {
+    if (/salary|payroll|employer/i.test(source)) {
+      return { category: "Salary", confidence: 1 };
+    }
+
+    if (/freelance|client|project|gig|payment received/i.test(source)) {
+      return { category: "Freelance", confidence: 1 };
+    }
+
+    if (/interest|dividend|investment/i.test(source)) {
+      return { category: "Investment", confidence: 1 };
+    }
+
+    // fallback income bucket
+    return { category: "Income", confidence: 0.9 };
+  }
+
+  /**
+   * ===============================
+   * 🔥 STEP 2: SIMILARITY MATCH (EXPENSES)
+   * ===============================
+   */
+
   let best = { category: "Uncategorized", score: 0 };
+
   for (const c of categoryCorpus) {
     const score = stringSimilarity.compareTwoStrings(source, c.text);
+
     if (score > best.score) {
       best = { category: c.category, score };
     }
   }
 
-  // If best score is low, still return Uncategorized
-  const threshold = 0.12; // small but avoids random matches; adjust over time
-  if (best.score < threshold) return { category: "Uncategorized", confidence: best.score };
+  /**
+   * ===============================
+   * 🔥 STEP 3: THRESHOLD CHECK
+   * ===============================
+   */
+
+  const threshold = 0.12;
+
+  if (best.score < threshold) {
+    return { category: "Uncategorized", confidence: best.score };
+  }
+
+  /**
+   * ===============================
+   * 🔥 STEP 4: SAFETY GUARDS
+   * ===============================
+   */
+
+  // 🚫 Prevent invalid mappings
+  if (
+    kind === "expense" &&
+    ["Salary", "Income", "Freelance"].includes(best.category)
+  ) {
+    return { category: "Uncategorized", confidence: best.score };
+  }
+
+  if (
+    kind === "income" &&
+    ["Entertainment", "Dining", "Groceries", "Bills"].includes(best.category)
+  ) {
+    return { category: "Income", confidence: best.score };
+  }
+
   return { category: best.category, confidence: best.score };
 }

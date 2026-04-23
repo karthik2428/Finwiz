@@ -31,17 +31,24 @@ export const AuthProvider = ({ children }) => {
         try {
             const { data } = await api.post('/auth/login', { email, password });
             localStorage.setItem('token', data.token);
+            
+            let userData;
             // Assuming login returns user object or we fetch it
-            // If login response doesn't have user, we might need to fetch profile
-            // Let's assume it returns { token, user } or just token
             if (data.user) {
+                userData = data.user;
                 setUser(data.user);
             } else {
                 // Fetch profile if not provided
                 const profile = await api.get('/user/profile');
+                userData = profile.data;
                 setUser(profile.data);
             }
-            return { success: true };
+            
+            // IMPORTANT: Return the user object along with success
+            return { 
+                success: true, 
+                user: userData  // ← This is the key fix!
+            };
         } catch (error) {
             return {
                 success: false,

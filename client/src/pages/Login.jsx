@@ -21,21 +21,25 @@ export default function Login() {
         setError('');
         setLoading(true);
 
-        const res = await login(formData.email, formData.password);
+        try {
+            const res = await login(formData.email, formData.password);
 
-        if (res.success) {
-
-            if (res.user?.role === 'admin') {
-                navigate('/admin');
+            if (res.success) {
+                // Check user role and redirect accordingly
+                if (res.user?.role === 'admin') {
+                    navigate('/admin');
+                } else {
+                    navigate('/dashboard');
+                }
             } else {
-                navigate('/dashboard');
+                setError(res.message || 'Login failed. Please try again.');
             }
-
-        } else {
-            setError(res.message);
+        } catch (err) {
+            console.error("Login error:", err);
+            setError('An unexpected error occurred. Please try again.');
+        } finally {
+            setLoading(false);
         }
-
-        setLoading(false);
     };
 
     return (
@@ -140,7 +144,7 @@ export default function Login() {
                             <button
                                 type="submit"
                                 disabled={loading}
-                                className="w-full py-3 rounded-xl font-semibold text-white bg-gradient-to-r from-indigo-500 to-purple-600 hover:opacity-90 transition shadow-lg shadow-indigo-500/30"
+                                className="w-full py-3 rounded-xl font-semibold text-white bg-gradient-to-r from-indigo-500 to-purple-600 hover:opacity-90 transition shadow-lg shadow-indigo-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 {loading ? "Signing in..." : "Sign In"}
                             </button>
